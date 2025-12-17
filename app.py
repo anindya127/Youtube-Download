@@ -73,6 +73,8 @@ if 'video_info' in st.session_state:
             res_label = f"{h}p" if h else "Unknown"
             if h >= 2160: res_label += " (4K)"
             elif h >= 1440: res_label += " (2K)"
+            elif h >= 1080: res_label += " (HD)"
+            else: res_label += " (SD)"
             
             label = f"{res_label} | {fps}fps | {ext.upper()}"
             
