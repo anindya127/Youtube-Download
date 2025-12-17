@@ -95,4 +95,66 @@ if 'video_info' in st.session_state:
         label = f"{row['Resolution']} | {row['FPS']}fps | {row['Ext']} (ID: {row['ID']})"
         options_list.append((label, row['ID']))
     
-    selected_option = st.selectbox("Select Quality to Download:", options_list, format_func=
+    selected_option = st.selectbox("Select Quality to Download:", options_list, format_func=lambda x: x[0])
+    
+    # --- C. EXECUTE DOWNLOAD ---
+    if st.button("🚀 Start Download"):
+        target_id = selected_option[1]
+        
+        with st.spinner("Downloading and processing..."):
+            try:
+                # Cleanup old files
+                if os.path.exists(DOWNLOAD_FOLDER):
+                    shutil.rmtree(DOWNLOAD_FOLDER)
+                os.makedirs(DOWNLOAD_FOLDER)
+                
+                safe_filename = "download"
+                output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
+
+                # Setup Options
+                ydl_opts = {
+                    'outtmpl': output_path,
+                    'restrictfilenames': True,
+                    'extractor_args': {'youtube': {'player_client': ['android']}}, 
+                    # Note: No cookies passed here to prevent the "Skipping Android" error
+                }
+
+                if dl_type == "Audio Only (MP3)":
+                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                    }]
+                else:
+                    # VIDEO: Match the exact ID user picked + Best Audio
+                    ydl_opts['format'] = f"{target_id}+bestaudio/best"
+                    # MKV is the safest container for cloud servers
+                    ydl_opts['merge_output_format'] = 'mkv'
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+
+                # Find File
+                found = False
+                for f in os.listdir(DOWNLOAD_FOLDER):
+                    if f.startswith(safe_filename):
+                        filepath = os.path.join(DOWNLOAD_FOLDER, f)
+                        # Construct a nice filename for the user
+                        final_name = f"{info['title']}.{f.split('.')[-1]}"
+                        
+                        st.success("✅ Ready!")
+                        with open(filepath, "rb") as file:
+                            st.download_button(
+                                label="📥 Save to Device",
+                                data=file,
+                                file_name=final_name,
+                                mime="application/octet-stream"
+                            )
+                        found = True
+                        break
+                
+                if not found:
+                    st.error("Error: Download finished but file not found.")
+
+            except Exception as e:
+                st.error(f"Download Error: {e}")
