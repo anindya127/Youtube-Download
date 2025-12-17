@@ -3,20 +3,20 @@ import yt_dlp
 import os
 import pandas as pd
 
-# 1. Setup Directories & Config
+# 1. Setup Directories
 DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 st.set_page_config(page_title="Ultra HD Downloader", page_icon="🚀", layout="wide")
-st.title("🚀 YouTube Downloader (8K/4K Supported)")
+st.title("🚀 YouTube Downloader (Smart Fallback)")
 
-# 2. Robust Cookie Handling (Use Absolute Path)
+# 2. Cookie Setup
 COOKIE_FILE = "cookies.txt"
 if os.path.exists(COOKIE_FILE):
     COOKIE_PATH = os.path.abspath(COOKIE_FILE)
     use_cookies = True
-    st.success("✅ Cookies found! Premium/4K/8K formats unlocked.")
+    st.success("✅ Cookies found! Premium/4K/8K unlocked.")
 else:
     COOKIE_PATH = None
     use_cookies = False
@@ -29,12 +29,10 @@ if url:
     if st.button("🔍 Analyze Video"):
         with st.spinner("Decrypting video signature..."):
             try:
-                # Analysis Options
+                # STRICT ARGS: We must use the exact same args for analysis and download
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
-                    'check_formats': True,
-                    # Ensure we see 4K (Web Client)
                     'extractor_args': {'youtube': {'player_client': ['web', 'android']}}
                 }
                 if use_cookies:
@@ -48,7 +46,7 @@ if url:
             except Exception as e:
                 st.error(f"Error fetching info: {e}")
 
-# 4. Display Options & Download
+# 4. Display & Download
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
     
@@ -58,117 +56,127 @@ if 'video_info' in st.session_state:
             st.image(info.get('thumbnail'), width="stretch")
     with col2:
         st.subheader(info.get('title'))
-        st.write(f"**Channel:** {info.get('uploader')}")
         st.write(f"**Duration:** {info.get('duration_string')}")
 
     # --- PROCESS FORMATS ---
     formats = info.get('formats', [])
     video_options = []
-    seen_resolutions = set()
+    seen = set()
     
     for f in formats:
         if f.get('vcodec') != 'none':
-            height = f.get('height') or 0
+            h = f.get('height') or 0
             fps = f.get('fps') or 0
+            f_id = f.get('format_id')
+            ext = f.get('ext')
             
-            res_label = f"{height}p" if height else "Unknown"
-            if height >= 2160: res_label += " (4K/8K)"
-            elif height >= 1440: res_label += " (2K)"
-            elif height == 1080: res_label += " (FHD)"
-
-            full_label = f"{res_label} | {fps}fps"
+            res_label = f"{h}p" if h else "Unknown"
+            if h >= 2160: res_label += " (4K)"
+            elif h >= 1440: res_label += " (2K)"
             
-            # Deduplicate
-            unique_key = f"{height}-{fps}"
-            if unique_key not in seen_resolutions:
-                seen_resolutions.add(unique_key)
-                # Sort Key: Height -> FPS
-                sort_key = (height * 100) + fps
-                video_options.append((sort_key, full_label, height, fps))
+            label = f"{res_label} | {fps}fps | {ext.upper()}"
+            
+            # Key to avoid duplicates
+            key = f"{h}-{fps}"
+            if key not in seen:
+                seen.add(key)
+                # Sort: Height > FPS
+                sort_val = (h * 100) + fps
+                video_options.append((sort_val, label, f_id, h))
 
-    # Sort High to Low
     video_options.sort(key=lambda x: x[0], reverse=True)
 
-    # --- SHOW TABLE ---
-    st.write("### 📊 Available Resolutions")
-    table_data = [{"Resolution": opt[1]} for opt in video_options]
-    if table_data:
-        st.dataframe(pd.DataFrame(table_data), hide_index=True, width="stretch")
-
-    # --- SELECTION ---
+    # --- SHOW OPTIONS ---
     st.write("### ⬇️ Download Options")
-    download_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
-
-    selected_height = None
     
-    if download_type.startswith("Video"):
-        selected_label_tuple = st.selectbox(
-            "Select Quality:", 
-            video_options,
-            format_func=lambda x: x[1]
-        )
-        selected_height = selected_label_tuple[2] # We only need height for sorting
-
-    # 5. Download Button
+    # Selection Menu
+    selected_tuple = st.selectbox(
+        "Select Quality:", 
+        video_options,
+        format_func=lambda x: x[1]
+    )
+    
     if st.button("🚀 Start Download"):
-        with st.spinner("Processing... (This may take a moment)"):
+        target_id = selected_tuple[2] # Format ID
+        target_height = selected_tuple[3] # Resolution Height
+        
+        with st.spinner("Processing... (Auto-retrying if 4K fails)"):
             try:
-                # Cleanup
+                # Clear previous files
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     os.remove(os.path.join(DOWNLOAD_FOLDER, f))
 
                 safe_filename = "download"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
                 
-                # --- ROBUST DOWNLOAD CONFIGURATION ---
-                ydl_opts = {
+                # Base Options
+                base_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
-                    # Prioritize Web client for 4K
                     'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
+                    # IMPORTANT: Use MKV to allow 4K VP9 video to merge with Opus audio
+                    'merge_output_format': 'mkv' 
                 }
-                
                 if use_cookies:
-                    ydl_opts['cookiefile'] = COOKIE_PATH
+                    base_opts['cookiefile'] = COOKIE_PATH
 
-                if "Audio" in download_type:
-                    ydl_opts['format'] = 'bestaudio/best'
-                    ydl_opts['postprocessors'] = [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }]
-                else:
-                    # THE FIX: Use Format Sorting instead of Strict Format Selection
-                    # This prevents "Requested format not available" crashes
-                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
-                    ydl_opts['format_sort'] = [f'res:{selected_height}'] 
-                    
-                    # Explain: The line above tells yt-dlp: 
-                    # "Get the best video, but prioritize the resolution I selected."
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-
-                # Find result
-                downloaded_file = None
-                for f in os.listdir(DOWNLOAD_FOLDER):
-                    if f.startswith(safe_filename):
-                        downloaded_file = os.path.join(DOWNLOAD_FOLDER, f)
-                        final_ext = f.split('.')[-1]
-                        break
+                # --- RETRY STRATEGY ---
+                success = False
                 
-                if downloaded_file:
-                    st.success("✅ Done!")
-                    with open(downloaded_file, "rb") as file:
-                        st.download_button(
-                            label=f"📥 Save {final_ext.upper()}",
-                            data=file,
-                            file_name=f"{info['title']}.{final_ext}",
-                            mime="application/octet-stream"
-                        )
-                else:
-                    st.error("Processing failed: No file found.")
+                # ATTEMPT 1: Exact Format ID
+                if not success:
+                    try:
+                        st.write("Attempt 1: Trying exact format match...")
+                        opts = base_opts.copy()
+                        opts['format'] = f"{target_id}+bestaudio/best"
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            ydl.download([url])
+                        success = True
+                    except Exception as e:
+                        st.warning(f"Attempt 1 failed: {e}")
 
+                # ATTEMPT 2: By Resolution (Strict)
+                if not success:
+                    try:
+                        st.write(f"Attempt 2: Trying best video at {target_height}p...")
+                        opts = base_opts.copy()
+                        # "bestvideo[height=2160]+bestaudio"
+                        opts['format'] = f"bestvideo[height={target_height}]+bestaudio/best"
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            ydl.download([url])
+                        success = True
+                    except Exception as e:
+                        st.warning(f"Attempt 2 failed: {e}")
+
+                # ATTEMPT 3: Best Available (Fallback)
+                if not success:
+                    try:
+                        st.write("Attempt 3: Falling back to best available quality...")
+                        opts = base_opts.copy()
+                        opts['format'] = "bestvideo+bestaudio/best"
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            ydl.download([url])
+                        success = True
+                    except Exception as e:
+                        st.error(f"All attempts failed: {e}")
+
+                # --- SERVE FILE ---
+                if success:
+                    downloaded_file = None
+                    for f in os.listdir(DOWNLOAD_FOLDER):
+                        if f.startswith(safe_filename):
+                            downloaded_file = os.path.join(DOWNLOAD_FOLDER, f)
+                            final_ext = f.split('.')[-1]
+                            break
+                    
+                    if downloaded_file:
+                        st.success(f"✅ Downloaded successfully as .{final_ext.upper()}!")
+                        with open(downloaded_file, "rb") as file:
+                            st.download_button(
+                                label=f"📥 Save {final_ext.upper()} to Device",
+                                data=file,
+                                file_name=f"{info['title']}.{final_ext}",
+                                mime="application/octet-stream"
+                            )
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Critical Error: {e}")
