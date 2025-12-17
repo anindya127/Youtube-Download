@@ -9,17 +9,17 @@ DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# Cookie Setup (Still good to have, even for Android client)
+# Check for cookies (But we will be smart about when to use them)
 COOKIE_FILE = "cookies.txt"
 if os.path.exists(COOKIE_FILE):
     COOKIE_PATH = os.path.abspath(COOKIE_FILE)
-    use_cookies = True
+    has_cookies = True
 else:
     COOKIE_PATH = None
-    use_cookies = False
+    has_cookies = False
 
 st.set_page_config(page_title="Simple YouTube Downloader", layout="wide")
-st.title("📺 YouTube Downloader (Table View)")
+st.title("📺 YouTube Downloader (Stable Android Mode)")
 
 # --- 1. INPUT ---
 url = st.text_input("Paste YouTube URL:")
@@ -29,14 +29,14 @@ if url:
     if st.button("🔍 Analyze Video"):
         with st.spinner("Fetching video details..."):
             try:
-                # We use 'android' client because you confirmed Web/iOS failed.
-                # Android is the most stable for Cloud Servers (usually max 1080p).
+                # FIX: We strictly use 'android' client because it is the most stable for Cloud.
+                # CRITICAL FIX: We DO NOT pass cookies to Android client, or yt-dlp will skip it.
                 ydl_opts = {
                     'quiet': True,
                     'extractor_args': {'youtube': {'player_client': ['android']}},
                 }
-                if use_cookies:
-                    ydl_opts['cookiefile'] = COOKIE_PATH
+                
+                # We intentionally DO NOT add 'cookiefile' here to prevent the crash.
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -65,7 +65,6 @@ if 'video_info' in st.session_state:
             filesize = f.get('filesize') or f.get('filesize_approx')
             size_mb = f"{filesize / 1024 / 1024:.1f} MB" if filesize else "N/A"
 
-            # Create the row for the UI table
             table_rows.append({
                 "Format ID": f_id,
                 "Resolution": res,
@@ -73,15 +72,13 @@ if 'video_info' in st.session_state:
                 "FPS": fps,
                 "Note": note,
                 "Size": size_mb,
-                "_sort": f.get('height') or 0 # Hidden column for sorting
+                "_sort": f.get('height') or 0
             })
 
-    # Convert to DataFrame
+    # Sort & Display
     df = pd.DataFrame(table_rows)
-    # Sort by Resolution (High to Low)
     df = df.sort_values(by="_sort", ascending=False)
     
-    # Display the Table (Matches your screenshot design)
     st.write("### Available Resolutions")
     st.dataframe(
         df[["Format ID", "Resolution", "Extension", "FPS", "Note", "Size"]],
@@ -92,11 +89,9 @@ if 'video_info' in st.session_state:
     # --- B. DOWNLOAD OPTIONS ---
     st.write("### Download Options")
     
-    # 1. Select Type
     dl_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
     
-    # 2. Select Format ID (Dropdown populated from table)
-    # We create a list of labels for the dropdown
+    # Dropdown Options
     options_list = []
     for index, row in df.iterrows():
         label = f"{row['Format ID']} - {row['Resolution']} ({row['Extension']})"
@@ -110,7 +105,7 @@ if 'video_info' in st.session_state:
         
         with st.spinner("Downloading..."):
             try:
-                # Cleanup old files
+                # Cleanup
                 if os.path.exists(DOWNLOAD_FOLDER):
                     shutil.rmtree(DOWNLOAD_FOLDER)
                 os.makedirs(DOWNLOAD_FOLDER)
@@ -122,12 +117,10 @@ if 'video_info' in st.session_state:
                 ydl_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
-                    'extractor_args': {'youtube': {'player_client': ['android']}}, # Stick to Android
+                    'extractor_args': {'youtube': {'player_client': ['android']}}, # Strict Android
                 }
-                if use_cookies:
-                    ydl_opts['cookiefile'] = COOKIE_PATH
-
-                # Logic based on user selection
+                # CRITICAL FIX: Do NOT use cookies for video download either
+                
                 if dl_type == "Audio Only (MP3)":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
@@ -135,16 +128,13 @@ if 'video_info' in st.session_state:
                         'preferredcodec': 'mp3',
                     }]
                 else:
-                    # VIDEO: Match the exact ID user picked + Best Audio
                     ydl_opts['format'] = f"{target_id}+bestaudio/best"
-                    # We use MKV because it is safer for merging than MP4 on servers
                     ydl_opts['merge_output_format'] = 'mkv'
 
-                # Run Download
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-                # Find File and Show Button
+                # Find File
                 found = False
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
