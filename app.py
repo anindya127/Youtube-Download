@@ -28,7 +28,6 @@ if url:
         with st.spinner("Decrypting video signature..."):
             try:
                 # 'web' client is prioritized for 4K/8K
-                # 'android' is backup for 1080p reliability
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
@@ -52,7 +51,6 @@ if 'video_info' in st.session_state:
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        # Fixed Warning: Used width="stretch" instead of use_container_width
         if info.get('thumbnail'):
             st.image(info.get('thumbnail'), width="stretch")
     with col2:
@@ -63,11 +61,10 @@ if 'video_info' in st.session_state:
     # --- PROCESS FORMATS ---
     formats = info.get('formats', [])
     video_options = []
+    seen_resolutions = set()
     
     for f in formats:
         if f.get('vcodec') != 'none':
-            f_id = f.get('format_id')
-            ext = f.get('ext')
             height = f.get('height') or 0
             fps = f.get('fps') or 0
             
@@ -77,37 +74,34 @@ if 'video_info' in st.session_state:
             elif height >= 1440: res_label += " (2K)"
             elif height == 1080: res_label += " (FHD)"
 
-            full_label = f"{res_label} | {ext.upper()} | {fps}fps | ID: {f_id}"
+            # We use height + fps as the unique key instead of Format ID
+            full_label = f"{res_label} | {fps}fps"
             
-            # Sort Key: Height -> FPS
-            sort_key = (height * 100) + fps
-            video_options.append((sort_key, full_label, f_id, height, ext))
+            # Avoid duplicates in the dropdown (show best FPS for each resolution)
+            unique_key = f"{height}-{fps}"
+            if unique_key not in seen_resolutions:
+                seen_resolutions.add(unique_key)
+                
+                # Sort Key: Height -> FPS
+                sort_key = (height * 100) + fps
+                video_options.append((sort_key, full_label, height, fps))
 
     # SORT: Highest resolution first
     video_options.sort(key=lambda x: x[0], reverse=True)
 
     # --- TABLE DISPLAY ---
+    # Just to show the user what we found
     st.write("### 📊 Available Resolutions")
-    
-    table_data = []
-    for _, label, f_id, h, ext in video_options:
-        table_data.append({
-            "Resolution": f"{h}p",
-            "Format": ext.upper(),
-            "Label": label,
-            "ID": f_id
-        })
-    
+    table_data = [{"Resolution": opt[1]} for opt in video_options]
     if table_data:
-        df = pd.DataFrame(table_data)
-        # Fixed Warning: Used width="stretch" instead of use_container_width
-        st.dataframe(df[["Resolution", "Format", "ID"]], hide_index=True, width="stretch")
+        st.dataframe(pd.DataFrame(table_data), hide_index=True, width="stretch")
 
     # --- SELECTION ---
     st.write("### ⬇️ Download Options")
     download_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
 
-    selected_format_id = None
+    selected_height = None
+    selected_fps = None
     
     if download_type.startswith("Video"):
         selected_label_tuple = st.selectbox(
@@ -115,11 +109,12 @@ if 'video_info' in st.session_state:
             video_options,
             format_func=lambda x: x[1]
         )
-        selected_format_id = selected_label_tuple[2]
+        selected_height = selected_label_tuple[2]
+        selected_fps = selected_label_tuple[3]
 
     # 4. Download Button
     if st.button("🚀 Start Download"):
-        with st.spinner("Processing... (4K merges may take longer)"):
+        with st.spinner("Processing... 4K videos may take time."):
             try:
                 # Cleanup old files
                 for f in os.listdir(DOWNLOAD_FOLDER):
@@ -131,6 +126,7 @@ if 'video_info' in st.session_state:
                 ydl_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
+                    # We MUST use the same client args to find the 4K streams again
                     'extractor_args': {'youtube': {'player_client': ['web', 'android']}}
                 }
                 
@@ -145,8 +141,12 @@ if 'video_info' in st.session_state:
                         'preferredquality': '192',
                     }]
                 else:
-                    ydl_opts['format'] = f"{selected_format_id}+bestaudio/best"
-                    ydl_opts['merge_output_format'] = 'mp4' 
+                    # ROBUST LOGIC: Ask for the specific height instead of ID
+                    # This prevents "Format Not Found" errors if IDs change
+                    ydl_opts['format'] = f"bestvideo[height={selected_height}]+bestaudio/best[height={selected_height}]/best"
+                    
+                    # NOTE: We removed 'merge_output_format' = 'mp4' 
+                    # This allows 4K to download as MKV/WebM (Native) which is safer.
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
