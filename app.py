@@ -7,37 +7,37 @@ DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-st.title("🎥 YouTube Downloader (Anti-Block)")
+st.title("🎥 YouTube Downloader (With Cookies)")
+st.write("To bypass the '403 Forbidden' error, upload your cookies.txt file.")
 
+# 1. Input Section
 url = st.text_input("Paste YouTube URL here:")
+cookie_file = st.file_uploader("Upload cookies.txt (Required for Web Servers)", type=["txt"])
 
-if url:
-    if st.button("Check Resolutions"):
-        with st.spinner("Attempting to bypass YouTube blocks..."):
+if url and cookie_file:
+    # Save the uploaded cookie file temporarily
+    with open("cookies.txt", "wb") as f:
+        f.write(cookie_file.getbuffer())
+    
+    if st.button("Check Video"):
+        with st.spinner("Authenticating and fetching info..."):
             try:
-                # TRICK: We tell YouTube we are an Android device, not a server
                 ydl_opts = {
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android', 'web_embedded']
-                        }
-                    },
-                    'nocheckcertificate': True,
+                    'cookiefile': 'cookies.txt', # <--- THIS IS THE KEY FIX
+                    'quiet': True,
+                    'no_warnings': True,
                 }
-                
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     st.session_state['video_info'] = info
-                    st.success(f"Success! Found: {info.get('title', 'Unknown Title')}")
-            
+                    st.success(f"Success! Found: {info.get('title')}")
             except Exception as e:
-                st.error("YouTube blocked the connection.")
-                st.error(f"Technical Error: {e}")
+                st.error(f"Error: {e}")
 
-# Only show options if we successfully got the info
+# 2. Download Section
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
-    st.write(f"**Video:** {info.get('title')}")
+    st.write(f"**Title:** {info['title']}")
     
     option = st.selectbox(
         "Choose Format:",
@@ -47,17 +47,12 @@ if 'video_info' in st.session_state:
     if st.button("Download Now"):
         with st.spinner("Downloading..."):
             try:
-                # Use a safe filename
                 safe_filename = "downloaded_video"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
                 
                 ydl_opts = {
+                    'cookiefile': 'cookies.txt', # Pass cookies to download too
                     'outtmpl': output_path,
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android', 'web_embedded']
-                        }
-                    }
                 }
                 
                 if "Audio" in option:
@@ -75,7 +70,7 @@ if 'video_info' in st.session_state:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-                # Find the file to provide download button
+                # Find the file
                 downloaded_file = None
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
