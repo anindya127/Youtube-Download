@@ -10,15 +10,37 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 
 # Check for cookies.txt in the repository
 COOKIE_FILE = "cookies.txt"
-use_cookies = os.path.exists(COOKIE_FILE)
+has_cookie_file = os.path.exists(COOKIE_FILE)
 
 st.set_page_config(page_title="Pro YouTube Downloader", page_icon="📺")
 st.title("Pro YouTube Downloader")
 
-if use_cookies:
-    st.success("'cookies.txt' found! Premium formats (1080p Premium/Age-gated) unlocked.")
+# Cookie/Authentication Options
+st.sidebar.header("🍪 Authentication Settings")
+st.sidebar.write("For age-restricted or premium videos")
+
+cookie_method = st.sidebar.radio(
+    "Choose Cookie Source:",
+    ["None (Public videos only)",
+     "Browser Cookies (Recommended)", "cookies.txt File"],
+    help="Browser Cookies automatically uses your logged-in browser session"
+)
+
+selected_browser = None
+if cookie_method == "Browser Cookies (Recommended)":
+    selected_browser = st.sidebar.selectbox(
+        "Select your browser:",
+        ["chrome", "firefox", "edge", "opera", "brave", "safari"],
+        help="Make sure you're logged into YouTube in this browser"
+    )
+    st.sidebar.success(f"✅ Will use cookies from {selected_browser.title()}")
+elif cookie_method == "cookies.txt File":
+    if has_cookie_file:
+        st.sidebar.success("✅ 'cookies.txt' found!")
+    else:
+        st.sidebar.error("❌ 'cookies.txt' not found in directory")
 else:
-    st.warning("'cookies.txt' not found. Some videos or high qualities might be blocked.")
+    st.sidebar.info("ℹ️ Only public videos will be accessible")
 
 # 2. Input URL
 url = st.text_input("Paste YouTube URL here:")
@@ -32,7 +54,11 @@ if url:
                     'quiet': True,
                     'no_warnings': True,
                 }
-                if use_cookies:
+
+                # Add authentication based on user selection
+                if cookie_method == "Browser Cookies (Recommended)" and selected_browser:
+                    ydl_opts['cookiesfrombrowser'] = (selected_browser,)
+                elif cookie_method == "cookies.txt File" and has_cookie_file:
                     ydl_opts['cookiefile'] = COOKIE_FILE
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -48,11 +74,11 @@ if 'video_info' in st.session_state:
     info = st.session_state['video_info']
     st.image(info.get('thumbnail'), width=300)
     st.write(f"**Title:** {info.get('title')}")
-    
+
     # --- PREPARE DATA FOR TABLE ---
     formats = info.get('formats', [])
     video_options = []
-    
+
     # Filter formats to show only useful ones (Video with or without audio)
     for f in formats:
         # We only want formats that have video (vcodec != none)
@@ -63,17 +89,17 @@ if 'video_info' in st.session_state:
             note = f.get('format_note', '')
             fps = f.get('fps')
             filesize = f.get('filesize_approx') or f.get('filesize')
-            
+
             # Convert filesize to MB if available
             size_mb = f"{filesize / 1024 / 1024:.1f} MB" if filesize else "N/A"
-            
+
             # Create a label for the dropdown
             label = f"ID: {f_id} | {res} | {ext} | {fps}fps | {note} | Size: {size_mb}"
             video_options.append((label, f_id))
 
     # --- SHOW TABLE (Visual Only) ---
     st.write("### Available Resolutions")
-    
+
     # Create a clean dataframe for the user to look at
     table_data = []
     for label, f_id in video_options:
@@ -86,10 +112,10 @@ if 'video_info' in st.session_state:
             "Note": parts[4].strip(),
             "Size": parts[5].strip()
         })
-    
+
     if table_data:
         df = pd.DataFrame(table_data)
-        # Sort by resolution (roughly) or ID to put best on top is tricky, 
+        # Sort by resolution (roughly) or ID to put best on top is tricky,
         # so we just display what yt-dlp gave us (usually low to high)
         st.dataframe(df, use_container_width=True)
 
@@ -98,12 +124,12 @@ if 'video_info' in st.session_state:
     download_type = st.radio("Select Type:", ["Video", "Audio Only (MP3)"])
 
     selected_format_id = None
-    
+
     if download_type == "Video":
         # Reverse list so highest quality is usually at the bottom/top depending on list
         # We let user pick from the string list
         selected_label = st.selectbox(
-            "Select Video Quality (Matches Table Above):", 
+            "Select Video Quality (Matches Table Above):",
             [opt[0] for opt in reversed(video_options)]
         )
         # Find the ID associated with the label
@@ -122,15 +148,19 @@ if 'video_info' in st.session_state:
 
                 safe_filename = "download"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
-                
+
                 ydl_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
                 }
-                if use_cookies:
+
+                # Add authentication based on user selection
+                if cookie_method == "Browser Cookies (Recommended)" and selected_browser:
+                    ydl_opts['cookiesfrombrowser'] = (selected_browser,)
+                elif cookie_method == "cookies.txt File" and has_cookie_file:
                     ydl_opts['cookiefile'] = COOKIE_FILE
 
-                final_ext = "mp4" # default guess
+                final_ext = "mp4"  # default guess
 
                 if download_type == "Audio Only (MP3)":
                     ydl_opts['format'] = 'bestaudio/best'
@@ -140,13 +170,14 @@ if 'video_info' in st.session_state:
                         'preferredquality': '192',
                     }]
                     final_ext = "mp3"
-                
+
                 else:
                     # VIDEO MODE:
                     # We download the User Selected Video + The Best Audio
                     # This ensures sound works even if they pick a "video only" 4K stream
                     ydl_opts['format'] = f"{selected_format_id}+bestaudio/best"
-                    ydl_opts['merge_output_format'] = 'mp4' # Force merge into MP4
+                    # Force merge into MP4
+                    ydl_opts['merge_output_format'] = 'mp4'
                     final_ext = "mp4"
 
                 # Run Download
@@ -160,7 +191,7 @@ if 'video_info' in st.session_state:
                         downloaded_file = os.path.join(DOWNLOAD_FOLDER, f)
                         final_real_ext = f.split('.')[-1]
                         break
-                
+
                 if downloaded_file:
                     st.success("Processing Complete!")
                     with open(downloaded_file, "rb") as file:
@@ -171,7 +202,8 @@ if 'video_info' in st.session_state:
                             mime="application/octet-stream"
                         )
                 else:
-                    st.error("File processing failed. Please try a lower resolution.")
+                    st.error(
+                        "File processing failed. Please try a lower resolution.")
 
             except Exception as e:
                 st.error(f"Error: {e}")
