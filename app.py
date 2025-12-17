@@ -13,13 +13,13 @@ COOKIE_FILE = "cookies.txt"
 use_cookies = os.path.exists(COOKIE_FILE)
 
 st.set_page_config(page_title="Ultra HD Downloader", page_icon="🚀", layout="wide")
-st.title("🚀 YouTube Downloader (8K/4K Supported)")
+st.title("🚀 YouTube Downloader")
 
 # Status Indicator
 if use_cookies:
-    st.success("✅ Cookies found! Premium/4K/8K formats unlocked.")
+    st.success("Cookies found!")
 else:
-    st.warning("⚠️ No cookies found. 4K might be restricted.")
+    st.warning("No cookies found. 4K might be restricted.")
 
 # 2. URL Input
 url = st.text_input("Paste YouTube URL here:")
@@ -89,7 +89,7 @@ if 'video_info' in st.session_state:
     video_options.sort(key=lambda x: x[0], reverse=True)
 
     # --- TABLE DISPLAY ---
-    st.write("### 📊 Available Resolutions")
+    st.write("###Available Resolutions")
     
     table_data = []
     for _, label, f_id, h, ext in video_options:
@@ -120,8 +120,8 @@ if 'video_info' in st.session_state:
         selected_format_id = selected_label_tuple[2] # Get the ID
 
     # 4. Download Button
-    if st.button("🚀 Start Download"):
-        with st.spinner("Processing... 4K videos may take 2-3 minutes to merge."):
+    if st.button("Start Download"):
+        with st.spinner("Processing..."):
             try:
                 # Cleanup old files
                 for f in os.listdir(DOWNLOAD_FOLDER):
