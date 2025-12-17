@@ -1,14 +1,15 @@
 import streamlit as st
 import yt_dlp
 import os
+import pandas as pd
 import shutil
 
-# --- SETUP ---
+# --- CONFIGURATION ---
 DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# Check for cookies
+# Cookie Setup (Still good to have, even for Android client)
 COOKIE_FILE = "cookies.txt"
 if os.path.exists(COOKIE_FILE):
     COOKIE_PATH = os.path.abspath(COOKIE_FILE)
@@ -17,126 +18,152 @@ else:
     COOKIE_PATH = None
     use_cookies = False
 
-st.set_page_config(page_title="Brute Force Downloader", layout="wide")
-st.title("🛡️ YouTube Downloader (Brute Force Mode)")
+st.set_page_config(page_title="Simple YouTube Downloader", layout="wide")
+st.title("📺 YouTube Downloader (Table View)")
 
-# --- 1. SETTINGS ---
-st.write("### ⚙️ Configuration")
-col1, col2 = st.columns(2)
-with col1:
-    # CLIENT SWITCHER: This is the fix for "Format not available"
-    # If one fails, the user can try another.
-    client = st.selectbox(
-        "YouTube Client (Change this if download fails):",
-        ["web (Best for 4K)", "ios (Good Alternate)", "android (Safe/1080p)", "tv_embedded (Legacy)"]
-    )
-with col2:
-    # COOKIE TOGGLE: Sometimes cookies from a different IP cause the crash
-    enable_cookies = st.checkbox("Use cookies.txt?", value=use_cookies, disabled=not use_cookies)
-
-# --- 2. INPUT ---
+# --- 1. INPUT ---
 url = st.text_input("Paste YouTube URL:")
 
-# --- 3. ANALYZE (Simple Version) ---
+# --- 2. ANALYZE (Generate Table) ---
 if url:
-    if st.button("🔍 Find Formats"):
-        with st.spinner("Scanning..."):
+    if st.button("🔍 Analyze Video"):
+        with st.spinner("Fetching video details..."):
             try:
-                # We analyze using the SELECTED client
+                # We use 'android' client because you confirmed Web/iOS failed.
+                # Android is the most stable for Cloud Servers (usually max 1080p).
                 ydl_opts = {
                     'quiet': True,
-                    'extractor_args': {'youtube': {'player_client': [client]}},
+                    'extractor_args': {'youtube': {'player_client': ['android']}},
                 }
-                if enable_cookies and COOKIE_PATH:
+                if use_cookies:
                     ydl_opts['cookiefile'] = COOKIE_PATH
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     st.session_state['video_info'] = info
-                    st.session_state['current_client'] = client # Remember which client found these
-                    st.success(f"Found: {info.get('title')}")
+                    st.success(f"Loaded: {info.get('title')}")
 
             except Exception as e:
-                st.error(f"Analysis failed using '{client}' client. Try switching to 'android' or 'ios'.")
-                st.error(e)
+                st.error(f"Error: {e}")
 
-# --- 4. DOWNLOAD ---
+# --- 3. DISPLAY TABLE & OPTIONS ---
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
     
-    st.write(f"**Target:** {info['title']}")
-    
-    # Simple list of formats
+    # --- A. BUILD TABLE DATA ---
     formats = info.get('formats', [])
-    options = []
+    table_rows = []
+    
     for f in formats:
-        if f.get('vcodec') != 'none':
-            label = f"ID: {f['format_id']} | {f.get('resolution', '???')} | {f.get('ext')} | {f.get('note', '')}"
-            options.append((label, f['format_id']))
+        # Filter for relevant formats (Video or Audio)
+        if f.get('vcodec') != 'none' or f.get('acodec') != 'none':
+            f_id = f.get('format_id')
+            ext = f.get('ext')
+            res = f.get('resolution') if f.get('resolution') else "Audio Only"
+            fps = f.get('fps') if f.get('fps') else "-"
+            note = f.get('format_note') if f.get('format_note') else ""
+            filesize = f.get('filesize') or f.get('filesize_approx')
+            size_mb = f"{filesize / 1024 / 1024:.1f} MB" if filesize else "N/A"
+
+            # Create the row for the UI table
+            table_rows.append({
+                "Format ID": f_id,
+                "Resolution": res,
+                "Extension": ext,
+                "FPS": fps,
+                "Note": note,
+                "Size": size_mb,
+                "_sort": f.get('height') or 0 # Hidden column for sorting
+            })
+
+    # Convert to DataFrame
+    df = pd.DataFrame(table_rows)
+    # Sort by Resolution (High to Low)
+    df = df.sort_values(by="_sort", ascending=False)
     
-    # Reverse so high quality is top
-    options.reverse()
+    # Display the Table (Matches your screenshot design)
+    st.write("### Available Resolutions")
+    st.dataframe(
+        df[["Format ID", "Resolution", "Extension", "FPS", "Note", "Size"]],
+        hide_index=True,
+        use_container_width=True
+    )
+
+    # --- B. DOWNLOAD OPTIONS ---
+    st.write("### Download Options")
     
-    selected_option = st.selectbox("Select Format:", options, format_func=lambda x: x[0])
+    # 1. Select Type
+    dl_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
     
-    if st.button("🚀 Force Download"):
+    # 2. Select Format ID (Dropdown populated from table)
+    # We create a list of labels for the dropdown
+    options_list = []
+    for index, row in df.iterrows():
+        label = f"{row['Format ID']} - {row['Resolution']} ({row['Extension']})"
+        options_list.append((label, row['Format ID']))
+    
+    selected_option = st.selectbox("Select Format ID:", options_list, format_func=lambda x: x[0])
+    
+    # --- C. EXECUTE DOWNLOAD ---
+    if st.button("Start Download"):
         target_id = selected_option[1]
-        active_client = st.session_state.get('current_client', 'web')
         
-        with st.spinner(f"Attempting download using '{active_client}' client..."):
+        with st.spinner("Downloading..."):
             try:
-                # CLEANUP
+                # Cleanup old files
                 if os.path.exists(DOWNLOAD_FOLDER):
                     shutil.rmtree(DOWNLOAD_FOLDER)
                 os.makedirs(DOWNLOAD_FOLDER)
                 
-                safe_filename = "video"
+                safe_filename = "download"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
 
-                # --- METHOD 1: PRECISE ID ---
-                # We try to download EXACTLY what you asked for
+                # Setup Options
                 ydl_opts = {
                     'outtmpl': output_path,
-                    'extractor_args': {'youtube': {'player_client': [active_client]}},
-                    # We force MKV to avoid container errors
-                    'merge_output_format': 'mkv', 
+                    'restrictfilenames': True,
+                    'extractor_args': {'youtube': {'player_client': ['android']}}, # Stick to Android
                 }
-                
-                if enable_cookies and COOKIE_PATH:
+                if use_cookies:
                     ydl_opts['cookiefile'] = COOKIE_PATH
 
-                # LOGIC:
-                # 1. Try Specific ID + Best Audio
-                # 2. If that crashes, Fallback to "Best Video" generic command
-                try:
+                # Logic based on user selection
+                if dl_type == "Audio Only (MP3)":
+                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                    }]
+                else:
+                    # VIDEO: Match the exact ID user picked + Best Audio
                     ydl_opts['format'] = f"{target_id}+bestaudio/best"
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-                except Exception as e:
-                    st.warning(f"Precise download failed ({e}). Trying fallback...")
-                    
-                    # FALLBACK: Just get best quality availble
-                    ydl_opts['format'] = "bestvideo+bestaudio/best"
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
+                    # We use MKV because it is safer for merging than MP4 on servers
+                    ydl_opts['merge_output_format'] = 'mkv'
 
-                # --- SERVE FILE ---
+                # Run Download
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+
+                # Find File and Show Button
                 found = False
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
                         filepath = os.path.join(DOWNLOAD_FOLDER, f)
+                        final_name = f"{info['title']}.{f.split('.')[-1]}"
+                        
+                        st.success("Download Complete!")
                         with open(filepath, "rb") as file:
                             st.download_button(
-                                label="📥 Save Video",
+                                label="📥 Save to Device",
                                 data=file,
-                                file_name=f"download.{f.split('.')[-1]}",
+                                file_name=final_name,
                                 mime="application/octet-stream"
                             )
                         found = True
                         break
                 
                 if not found:
-                    st.error("Download finished but file missing. YouTube likely blocked the stream.")
+                    st.error("Error: File not found.")
 
             except Exception as e:
-                st.error(f"Critical Failure: {e}")
+                st.error(f"Download Error: {e}")
