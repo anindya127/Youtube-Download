@@ -11,31 +11,34 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 st.set_page_config(page_title="Ultra HD Downloader", page_icon="🚀", layout="wide")
 st.title("🚀 YouTube Downloader (8K/4K Supported)")
 
-# Check for cookies in the repository
+# 2. Robust Cookie Handling (Use Absolute Path)
 COOKIE_FILE = "cookies.txt"
-use_cookies = os.path.exists(COOKIE_FILE)
-
-if use_cookies:
+if os.path.exists(COOKIE_FILE):
+    COOKIE_PATH = os.path.abspath(COOKIE_FILE)
+    use_cookies = True
     st.success("✅ Cookies found! Premium/4K/8K formats unlocked.")
 else:
+    COOKIE_PATH = None
+    use_cookies = False
     st.warning("⚠️ No cookies found. 4K might be restricted.")
 
-# 2. URL Input
+# 3. URL Input
 url = st.text_input("Paste YouTube URL here:")
 
 if url:
     if st.button("🔍 Analyze Video"):
         with st.spinner("Decrypting video signature..."):
             try:
-                # 'web' client is prioritized for 4K/8K
+                # Analysis Options
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
                     'check_formats': True,
+                    # Ensure we see 4K (Web Client)
                     'extractor_args': {'youtube': {'player_client': ['web', 'android']}}
                 }
                 if use_cookies:
-                    ydl_opts['cookiefile'] = COOKIE_FILE
+                    ydl_opts['cookiefile'] = COOKIE_PATH
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -45,7 +48,7 @@ if url:
             except Exception as e:
                 st.error(f"Error fetching info: {e}")
 
-# 3. Display Options & Download
+# 4. Display Options & Download
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
     
@@ -68,29 +71,25 @@ if 'video_info' in st.session_state:
             height = f.get('height') or 0
             fps = f.get('fps') or 0
             
-            # Label the resolution clearly
             res_label = f"{height}p" if height else "Unknown"
             if height >= 2160: res_label += " (4K/8K)"
             elif height >= 1440: res_label += " (2K)"
             elif height == 1080: res_label += " (FHD)"
 
-            # We use height + fps as the unique key instead of Format ID
             full_label = f"{res_label} | {fps}fps"
             
-            # Avoid duplicates in the dropdown (show best FPS for each resolution)
+            # Deduplicate
             unique_key = f"{height}-{fps}"
             if unique_key not in seen_resolutions:
                 seen_resolutions.add(unique_key)
-                
                 # Sort Key: Height -> FPS
                 sort_key = (height * 100) + fps
                 video_options.append((sort_key, full_label, height, fps))
 
-    # SORT: Highest resolution first
+    # Sort High to Low
     video_options.sort(key=lambda x: x[0], reverse=True)
 
-    # --- TABLE DISPLAY ---
-    # Just to show the user what we found
+    # --- SHOW TABLE ---
     st.write("### 📊 Available Resolutions")
     table_data = [{"Resolution": opt[1]} for opt in video_options]
     if table_data:
@@ -101,7 +100,6 @@ if 'video_info' in st.session_state:
     download_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
 
     selected_height = None
-    selected_fps = None
     
     if download_type.startswith("Video"):
         selected_label_tuple = st.selectbox(
@@ -109,29 +107,29 @@ if 'video_info' in st.session_state:
             video_options,
             format_func=lambda x: x[1]
         )
-        selected_height = selected_label_tuple[2]
-        selected_fps = selected_label_tuple[3]
+        selected_height = selected_label_tuple[2] # We only need height for sorting
 
-    # 4. Download Button
+    # 5. Download Button
     if st.button("🚀 Start Download"):
-        with st.spinner("Processing... 4K videos may take time."):
+        with st.spinner("Processing... (This may take a moment)"):
             try:
-                # Cleanup old files
+                # Cleanup
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     os.remove(os.path.join(DOWNLOAD_FOLDER, f))
 
                 safe_filename = "download"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
                 
+                # --- ROBUST DOWNLOAD CONFIGURATION ---
                 ydl_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
-                    # We MUST use the same client args to find the 4K streams again
-                    'extractor_args': {'youtube': {'player_client': ['web', 'android']}}
+                    # Prioritize Web client for 4K
+                    'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
                 }
                 
                 if use_cookies:
-                    ydl_opts['cookiefile'] = COOKIE_FILE
+                    ydl_opts['cookiefile'] = COOKIE_PATH
 
                 if "Audio" in download_type:
                     ydl_opts['format'] = 'bestaudio/best'
@@ -141,17 +139,18 @@ if 'video_info' in st.session_state:
                         'preferredquality': '192',
                     }]
                 else:
-                    # ROBUST LOGIC: Ask for the specific height instead of ID
-                    # This prevents "Format Not Found" errors if IDs change
-                    ydl_opts['format'] = f"bestvideo[height={selected_height}]+bestaudio/best[height={selected_height}]/best"
+                    # THE FIX: Use Format Sorting instead of Strict Format Selection
+                    # This prevents "Requested format not available" crashes
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    ydl_opts['format_sort'] = [f'res:{selected_height}'] 
                     
-                    # NOTE: We removed 'merge_output_format' = 'mp4' 
-                    # This allows 4K to download as MKV/WebM (Native) which is safer.
+                    # Explain: The line above tells yt-dlp: 
+                    # "Get the best video, but prioritize the resolution I selected."
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-                # Find the file
+                # Find result
                 downloaded_file = None
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
@@ -160,7 +159,7 @@ if 'video_info' in st.session_state:
                         break
                 
                 if downloaded_file:
-                    st.success("✅ Done! File ready.")
+                    st.success("✅ Done!")
                     with open(downloaded_file, "rb") as file:
                         st.download_button(
                             label=f"📥 Save {final_ext.upper()}",
@@ -169,7 +168,7 @@ if 'video_info' in st.session_state:
                             mime="application/octet-stream"
                         )
                 else:
-                    st.error("Processing failed.")
+                    st.error("Processing failed: No file found.")
 
             except Exception as e:
                 st.error(f"Error: {e}")
