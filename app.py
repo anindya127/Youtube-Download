@@ -1,15 +1,14 @@
 import streamlit as st
 import yt_dlp
 import os
-import pandas as pd
 import shutil
 
-# --- CONFIGURATION ---
+# --- SETUP ---
 DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# Check for cookies (Crucial for 4K on Cloud)
+# Check for cookies
 COOKIE_FILE = "cookies.txt"
 if os.path.exists(COOKIE_FILE):
     COOKIE_PATH = os.path.abspath(COOKIE_FILE)
@@ -18,154 +17,126 @@ else:
     COOKIE_PATH = None
     use_cookies = False
 
-st.set_page_config(page_title="Direct YouTube Downloader", page_icon="⬇️", layout="wide")
-st.title("⬇️ Direct YouTube Downloader (Manual Selection)")
+st.set_page_config(page_title="Brute Force Downloader", layout="wide")
+st.title("🛡️ YouTube Downloader (Brute Force Mode)")
 
-# --- STATUS CHECK ---
-# Shows if the server is ready for high quality
+# --- 1. SETTINGS ---
+st.write("### ⚙️ Configuration")
 col1, col2 = st.columns(2)
 with col1:
-    if shutil.which("ffmpeg"):
-        st.success("✅ FFmpeg Active")
-    else:
-        st.error("❌ FFmpeg Missing (Merge will fail)")
+    # CLIENT SWITCHER: This is the fix for "Format not available"
+    # If one fails, the user can try another.
+    client = st.selectbox(
+        "YouTube Client (Change this if download fails):",
+        ["web (Best for 4K)", "ios (Good Alternate)", "android (Safe/1080p)", "tv_embedded (Legacy)"]
+    )
 with col2:
-    if use_cookies:
-        st.success("✅ Cookies Active (4K Unlocked)")
-    else:
-        st.warning("⚠️ No Cookies (4K might fail)")
+    # COOKIE TOGGLE: Sometimes cookies from a different IP cause the crash
+    enable_cookies = st.checkbox("Use cookies.txt?", value=use_cookies, disabled=not use_cookies)
 
-# --- STEP 1: INPUT ---
-url = st.text_input("Paste YouTube URL here:")
+# --- 2. INPUT ---
+url = st.text_input("Paste YouTube URL:")
 
+# --- 3. ANALYZE (Simple Version) ---
 if url:
-    if st.button("🔍 1. Fetch Formats"):
-        with st.spinner("Fetching format list..."):
+    if st.button("🔍 Find Formats"):
+        with st.spinner("Scanning..."):
             try:
-                # We use 'web' client to see 4K, just like your local script
+                # We analyze using the SELECTED client
                 ydl_opts = {
                     'quiet': True,
-                    'no_warnings': True,
-                    'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
+                    'extractor_args': {'youtube': {'player_client': [client]}},
                 }
-                if use_cookies:
+                if enable_cookies and COOKIE_PATH:
                     ydl_opts['cookiefile'] = COOKIE_PATH
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     st.session_state['video_info'] = info
-                    st.toast("Formats Loaded!", icon="✅")
+                    st.session_state['current_client'] = client # Remember which client found these
+                    st.success(f"Found: {info.get('title')}")
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Analysis failed using '{client}' client. Try switching to 'android' or 'ios'.")
+                st.error(e)
 
-# --- STEP 2: DISPLAY TABLE ---
+# --- 4. DOWNLOAD ---
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
     
-    st.write(f"**Video Title:** {info.get('title')}")
+    st.write(f"**Target:** {info['title']}")
     
-    # Process formats exactly like your local script
+    # Simple list of formats
     formats = info.get('formats', [])
-    data_list = []
-    
+    options = []
     for f in formats:
-        # Filter (Show Video+Audio or Audio-only)
-        if f.get('vcodec') != 'none' or f.get('acodec') != 'none':
-            f_id = f.get('format_id')
-            ext = f.get('ext')
-            res = f.get('resolution') if f.get('resolution') else "Audio Only"
-            note = f.get('format_note') if f.get('format_note') else ""
-            
-            # Create a label for the dropdown
-            label = f"ID: {f_id} | {ext} | {res} | {note}"
-            
-            data_list.append({
-                "Label": label,
-                "ID": f_id,
-                "Resolution": res,
-                "Ext": ext,
-                "Note": note
-            })
+        if f.get('vcodec') != 'none':
+            label = f"ID: {f['format_id']} | {f.get('resolution', '???')} | {f.get('ext')} | {f.get('note', '')}"
+            options.append((label, f['format_id']))
     
-    # Show the table (Reversed so high quality is top)
-    if data_list:
-        df = pd.DataFrame(data_list)
-        st.dataframe(df[["ID", "Ext", "Resolution", "Note"]], hide_index=True, width=800)
+    # Reverse so high quality is top
+    options.reverse()
     
-    # --- STEP 3: MANUAL SELECTION ---
-    st.write("### ⬇️ Select Options")
+    selected_option = st.selectbox("Select Format:", options, format_func=lambda x: x[0])
     
-    # Option 1: Pick from list
-    selected_row = st.selectbox(
-        "Choose a Format ID:",
-        reversed(data_list), # Best quality usually at bottom of list, so we reverse it
-        format_func=lambda x: x['Label']
-    )
-    
-    # Option 2: Choose Mode (like your local script's Option 1/2/3)
-    mode = st.radio("Download Mode:", ["Video (Merge with Audio)", "Audio Only (MP3)"])
-
-    if st.button("🚀 Download Now"):
-        target_id = selected_row['ID']
+    if st.button("🚀 Force Download"):
+        target_id = selected_option[1]
+        active_client = st.session_state.get('current_client', 'web')
         
-        with st.spinner("Downloading..."):
+        with st.spinner(f"Attempting download using '{active_client}' client..."):
             try:
-                # Clean old files
+                # CLEANUP
                 if os.path.exists(DOWNLOAD_FOLDER):
                     shutil.rmtree(DOWNLOAD_FOLDER)
                 os.makedirs(DOWNLOAD_FOLDER)
-
-                safe_filename = "download"
-                output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
                 
-                # BASE OPTIONS
+                safe_filename = "video"
+                output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
+
+                # --- METHOD 1: PRECISE ID ---
+                # We try to download EXACTLY what you asked for
                 ydl_opts = {
                     'outtmpl': output_path,
-                    'restrictfilenames': True,
-                    'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
+                    'extractor_args': {'youtube': {'player_client': [active_client]}},
+                    # We force MKV to avoid container errors
+                    'merge_output_format': 'mkv', 
                 }
-                if use_cookies:
+                
+                if enable_cookies and COOKIE_PATH:
                     ydl_opts['cookiefile'] = COOKIE_PATH
 
-                # LOGIC FROM YOUR LOCAL SCRIPT
-                if mode == "Audio Only (MP3)":
-                    # Option 2 in local script
-                    ydl_opts['format'] = 'bestaudio/best'
-                    ydl_opts['postprocessors'] = [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }]
-                else:
-                    # Option 3 in local script (Specific ID + Best Audio)
-                    # We force MKV container because 4K WebM + Audio often fails in MP4 on Cloud
+                # LOGIC:
+                # 1. Try Specific ID + Best Audio
+                # 2. If that crashes, Fallback to "Best Video" generic command
+                try:
                     ydl_opts['format'] = f"{target_id}+bestaudio/best"
-                    ydl_opts['merge_output_format'] = 'mkv' 
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                except Exception as e:
+                    st.warning(f"Precise download failed ({e}). Trying fallback...")
+                    
+                    # FALLBACK: Just get best quality availble
+                    ydl_opts['format'] = "bestvideo+bestaudio/best"
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
 
-                # RUN DOWNLOAD
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-
-                # SERVE FILE
-                found_file = None
+                # --- SERVE FILE ---
+                found = False
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
-                        found_file = os.path.join(DOWNLOAD_FOLDER, f)
-                        final_ext = f.split('.')[-1]
+                        filepath = os.path.join(DOWNLOAD_FOLDER, f)
+                        with open(filepath, "rb") as file:
+                            st.download_button(
+                                label="📥 Save Video",
+                                data=file,
+                                file_name=f"download.{f.split('.')[-1]}",
+                                mime="application/octet-stream"
+                            )
+                        found = True
                         break
                 
-                if found_file:
-                    st.success("✅ Download Complete!")
-                    with open(found_file, "rb") as file:
-                        st.download_button(
-                            label=f"📥 Save .{final_ext}",
-                            data=file,
-                            file_name=f"{info['title']}.{final_ext}",
-                            mime="application/octet-stream"
-                        )
-                else:
-                    st.error("Download finished, but file was not found.")
+                if not found:
+                    st.error("Download finished but file missing. YouTube likely blocked the stream.")
 
             except Exception as e:
-                st.error(f"Download Error: {e}")
+                st.error(f"Critical Failure: {e}")
