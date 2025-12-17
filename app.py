@@ -2,34 +2,38 @@ import streamlit as st
 import yt_dlp
 import os
 import pandas as pd
-import shutil
 
-# --- CONFIGURATION ---
+# 1. Setup Directories & Config
 DOWNLOAD_FOLDER = "downloads"
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# NOTE: We intentionally DO NOT load cookies.txt here.
-# The Android client (which works best on Cloud) crashes if cookies are provided.
-# This ensures the app remains stable for sharing.
+# Check for cookies.txt in the repository
+COOKIE_FILE = "cookies.txt"
+use_cookies = os.path.exists(COOKIE_FILE)
 
-st.set_page_config(page_title="Friend's Downloader", page_icon="🔗", layout="wide")
-st.title("🔗 YouTube Downloader (Shareable Version)")
+st.set_page_config(page_title="Pro YouTube Downloader", page_icon="📺")
+st.title("📺 Pro YouTube Downloader (4K Support)")
 
-# --- 1. INPUT ---
+if use_cookies:
+    st.success("✅ 'cookies.txt' found! Premium formats (1080p Premium/Age-gated) unlocked.")
+else:
+    st.warning("⚠️ 'cookies.txt' not found. Some videos or high qualities might be blocked.")
+
+# 2. Input URL
 url = st.text_input("Paste YouTube URL here:")
 
-# --- 2. ANALYZE (Generate Table) ---
 if url:
-    if st.button("🔍 Analyze Video"):
-        with st.spinner("Connecting to YouTube..."):
+    if st.button("Analyze Video"):
+        with st.spinner("Fetching video details..."):
             try:
-                # We use the 'android' client. 
-                # It is the only one that reliably works on free Cloud servers (up to 1080p).
+                # Configure options just to fetch metadata
                 ydl_opts = {
                     'quiet': True,
-                    'extractor_args': {'youtube': {'player_client': ['android']}},
+                    'no_warnings': True,
                 }
+                if use_cookies:
+                    ydl_opts['cookiefile'] = COOKIE_FILE
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -37,124 +41,137 @@ if url:
                     st.success(f"Found: {info.get('title')}")
 
             except Exception as e:
-                st.error(f"Could not fetch video. YouTube might be blocking the server temporarily.\nError: {e}")
+                st.error(f"Error fetching info: {e}")
 
-# --- 3. DISPLAY TABLE & OPTIONS ---
+# 3. Display Options & Download
 if 'video_info' in st.session_state:
     info = st.session_state['video_info']
-    
+    st.image(info.get('thumbnail'), width=300)
     st.write(f"**Title:** {info.get('title')}")
-
-    # --- A. BUILD TABLE DATA ---
-    formats = info.get('formats', [])
-    table_rows = []
     
+    # --- PREPARE DATA FOR TABLE ---
+    formats = info.get('formats', [])
+    video_options = []
+    
+    # Filter formats to show only useful ones (Video with or without audio)
     for f in formats:
-        # Filter for relevant formats
-        if f.get('vcodec') != 'none' or f.get('acodec') != 'none':
+        # We only want formats that have video (vcodec != none)
+        if f.get('vcodec') != 'none':
             f_id = f.get('format_id')
             ext = f.get('ext')
-            res = f.get('resolution') if f.get('resolution') else "Audio Only"
-            fps = f.get('fps') if f.get('fps') else "-"
-            note = f.get('format_note') or ""
-            filesize = f.get('filesize') or f.get('filesize_approx')
-            size_mb = f"{filesize / 1024 / 1024:.1f} MB" if filesize else "--"
-
-            # We use a hidden sort key to put higher resolution at top
-            height = f.get('height') or 0
+            res = f.get('resolution')
+            note = f.get('format_note', '')
+            fps = f.get('fps')
+            filesize = f.get('filesize_approx') or f.get('filesize')
             
-            table_rows.append({
-                "ID": f_id,
-                "Resolution": res,
-                "Ext": ext,
-                "FPS": fps,
-                "Size": size_mb,
-                "Note": note,
-                "_sort": height
-            })
+            # Convert filesize to MB if available
+            size_mb = f"{filesize / 1024 / 1024:.1f} MB" if filesize else "N/A"
+            
+            # Create a label for the dropdown
+            label = f"ID: {f_id} | {res} | {ext} | {fps}fps | {note} | Size: {size_mb}"
+            video_options.append((label, f_id))
 
-    # Sort & Display
-    df = pd.DataFrame(table_rows)
-    df = df.sort_values(by="_sort", ascending=False)
+    # --- SHOW TABLE (Visual Only) ---
+    st.write("### Available Resolutions")
     
-    st.write("### 📊 Available Qualities")
-    st.dataframe(
-        df[["ID", "Resolution", "Ext", "FPS", "Size", "Note"]],
-        hide_index=True,
-        use_container_width=True
-    )
+    # Create a clean dataframe for the user to look at
+    table_data = []
+    for label, f_id in video_options:
+        parts = label.split('|')
+        table_data.append({
+            "Format ID": parts[0].replace("ID: ", "").strip(),
+            "Resolution": parts[1].strip(),
+            "Ext": parts[2].strip(),
+            "FPS": parts[3].strip(),
+            "Note": parts[4].strip(),
+            "Size": parts[5].strip()
+        })
+    
+    if table_data:
+        df = pd.DataFrame(table_data)
+        # Sort by resolution (roughly) or ID to put best on top is tricky, 
+        # so we just display what yt-dlp gave us (usually low to high)
+        st.dataframe(df, use_container_width=True)
 
-    # --- B. DOWNLOAD OPTIONS ---
-    st.write("### ⬇️ Download Options")
+    # --- SELECTION MENU ---
+    st.write("### Download Options")
+    download_type = st.radio("Select Type:", ["Video", "Audio Only (MP3)"])
+
+    selected_format_id = None
     
-    dl_type = st.radio("Select Type:", ["Video (Auto-Merge Audio)", "Audio Only (MP3)"])
-    
-    # Dropdown Options
-    options_list = []
-    for index, row in df.iterrows():
-        label = f"{row['Resolution']} | {row['FPS']}fps | {row['Ext']} (ID: {row['ID']})"
-        options_list.append((label, row['ID']))
-    
-    selected_option = st.selectbox("Select Quality to Download:", options_list, format_func=lambda x: x[0])
-    
-    # --- C. EXECUTE DOWNLOAD ---
-    if st.button("🚀 Start Download"):
-        target_id = selected_option[1]
-        
-        with st.spinner("Downloading and processing..."):
+    if download_type == "Video":
+        # Reverse list so highest quality is usually at the bottom/top depending on list
+        # We let user pick from the string list
+        selected_label = st.selectbox(
+            "Select Video Quality (Matches Table Above):", 
+            [opt[0] for opt in reversed(video_options)]
+        )
+        # Find the ID associated with the label
+        for label, f_id in video_options:
+            if label == selected_label:
+                selected_format_id = f_id
+                break
+
+    # 4. Download Button
+    if st.button("Download Selected Format"):
+        with st.spinner("Processing on server... (This may take time for 4K)"):
             try:
-                # Cleanup old files
-                if os.path.exists(DOWNLOAD_FOLDER):
-                    shutil.rmtree(DOWNLOAD_FOLDER)
-                os.makedirs(DOWNLOAD_FOLDER)
-                
+                # Clean up old files in downloads to save space
+                for f in os.listdir(DOWNLOAD_FOLDER):
+                    os.remove(os.path.join(DOWNLOAD_FOLDER, f))
+
                 safe_filename = "download"
                 output_path = f"{DOWNLOAD_FOLDER}/{safe_filename}.%(ext)s"
-
-                # Setup Options
+                
                 ydl_opts = {
                     'outtmpl': output_path,
                     'restrictfilenames': True,
-                    'extractor_args': {'youtube': {'player_client': ['android']}}, 
-                    # Note: No cookies passed here to prevent the "Skipping Android" error
                 }
+                if use_cookies:
+                    ydl_opts['cookiefile'] = COOKIE_FILE
 
-                if dl_type == "Audio Only (MP3)":
+                final_ext = "mp4" # default guess
+
+                if download_type == "Audio Only (MP3)":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
+                        'preferredquality': '192',
                     }]
+                    final_ext = "mp3"
+                
                 else:
-                    # VIDEO: Match the exact ID user picked + Best Audio
-                    ydl_opts['format'] = f"{target_id}+bestaudio/best"
-                    # MKV is the safest container for cloud servers
-                    ydl_opts['merge_output_format'] = 'mkv'
+                    # VIDEO MODE:
+                    # We download the User Selected Video + The Best Audio
+                    # This ensures sound works even if they pick a "video only" 4K stream
+                    ydl_opts['format'] = f"{selected_format_id}+bestaudio/best"
+                    ydl_opts['merge_output_format'] = 'mp4' # Force merge into MP4
+                    final_ext = "mp4"
 
+                # Run Download
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-                # Find File
-                found = False
+                # Find the resulting file
+                downloaded_file = None
                 for f in os.listdir(DOWNLOAD_FOLDER):
                     if f.startswith(safe_filename):
-                        filepath = os.path.join(DOWNLOAD_FOLDER, f)
-                        # Construct a nice filename for the user
-                        final_name = f"{info['title']}.{f.split('.')[-1]}"
-                        
-                        st.success("✅ Ready!")
-                        with open(filepath, "rb") as file:
-                            st.download_button(
-                                label="📥 Save to Device",
-                                data=file,
-                                file_name=final_name,
-                                mime="application/octet-stream"
-                            )
-                        found = True
+                        downloaded_file = os.path.join(DOWNLOAD_FOLDER, f)
+                        final_real_ext = f.split('.')[-1]
                         break
                 
-                if not found:
-                    st.error("Error: Download finished but file not found.")
+                if downloaded_file:
+                    st.success("Processing Complete!")
+                    with open(downloaded_file, "rb") as file:
+                        st.download_button(
+                            label=f"📥 Save {final_real_ext.upper()} to Device",
+                            data=file,
+                            file_name=f"{info['title']}.{final_real_ext}",
+                            mime="application/octet-stream"
+                        )
+                else:
+                    st.error("File processing failed. Please try a lower resolution.")
 
             except Exception as e:
-                st.error(f"Download Error: {e}")
+                st.error(f"Error: {e}")
